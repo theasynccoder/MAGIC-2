@@ -11,6 +11,8 @@ import {
   Scan,
   Microscope,
   FileSearch,
+  Globe,
+  TestTube,
   Settings,
   HelpCircle,
   ChevronLeft,
@@ -38,6 +40,11 @@ const navItems = [
     icon: FileSearch,
   },
   {
+    title: 'Web Search',
+    href: '/chat?agent=web-search',
+    icon: Globe,
+  },
+  {
     title: 'Brain Tumor Detection',
     href: '/imaging?type=brain',
     icon: Brain,
@@ -51,6 +58,11 @@ const navItems = [
     title: 'Skin Lesion Analysis',
     href: '/imaging?type=skin',
     icon: Microscope,
+  },
+  {
+    title: 'Blood & Tissue Pathology',
+    href: '/imaging?type=pathology',
+    icon: TestTube,
   },
 ]
 
