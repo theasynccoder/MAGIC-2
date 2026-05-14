@@ -1,12 +1,13 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Bot, User, Copy, Check, Volume2, RotateCw } from 'lucide-react'
+import { Bot, User, Copy, Check, Volume2, RotateCw, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { audioApi } from '@/lib/api'
 
 interface ChatMessageProps {
@@ -16,9 +17,15 @@ interface ChatMessageProps {
   isStreaming?: boolean
   agentType?: string
   resultImage?: string
+  imageUrl?: string
+  needsValidation?: boolean
+  validationState?: 'pending' | 'validated' | 'rejected' | 'submitting'
+  onValidate?: (result: 'yes' | 'no', comments?: string) => void
 }
 
-export function ChatMessage({ role, content, timestamp, isStreaming, agentType, resultImage }: ChatMessageProps) {
+export function ChatMessage({ role, content, timestamp, isStreaming, agentType, resultImage, imageUrl, needsValidation, validationState, onValidate }: ChatMessageProps) {
+  const [showCommentBox, setShowCommentBox] = useState(false)
+  const [commentText, setCommentText] = useState('')
   const [copied, setCopied] = useState(false)
   const [isPlayingAudio, setIsPlayingAudio] = useState(false)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
@@ -93,6 +100,19 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
           )}
         </div>
 
+        {imageUrl && isUser && (
+          <div className="mb-3 rounded-lg overflow-hidden bg-secondary/30 p-2 inline-block">
+            <Image
+              src={imageUrl}
+              alt="Uploaded image"
+              width={320}
+              height={320}
+              className="max-w-xs max-h-64 w-auto h-auto rounded object-contain"
+              unoptimized
+            />
+          </div>
+        )}
+
         <div className="prose prose-invert prose-sm max-w-none">
           <ReactMarkdown
             components={{
@@ -135,6 +155,96 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
                 unoptimized
               />
             </div>
+          </div>
+        )}
+
+        {/* Human Validation UI */}
+        {needsValidation && !isUser && onValidate && (
+          <div className="mt-4 p-3 rounded-lg border border-border bg-secondary/30">
+            {validationState === 'pending' && !showCommentBox && (
+              <div className="space-y-3">
+                <p className="text-sm text-foreground/80">
+                  Please validate this result:
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => onValidate('yes')}
+                    className="gap-2 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30"
+                  >
+                    <ThumbsUp className="w-4 h-4" />
+                    Yes, confirm
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowCommentBox(true)}
+                    className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
+                  >
+                    <ThumbsDown className="w-4 h-4" />
+                    No, needs review
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {validationState === 'pending' && showCommentBox && (
+              <div className="space-y-3">
+                <p className="text-sm text-foreground/80">
+                  Please describe the issue or concern:
+                </p>
+                <Textarea
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="Add your comments..."
+                  className="min-h-[80px] resize-none bg-background/50"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => onValidate('no', commentText.trim() || undefined)}
+                    className="bg-destructive/15 text-destructive hover:bg-destructive/25 border border-destructive/30"
+                  >
+                    Submit feedback
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setShowCommentBox(false)
+                      setCommentText('')
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {validationState === 'submitting' && (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <RotateCw className="w-3 h-3 animate-spin" />
+                Submitting validation...
+              </p>
+            )}
+
+            {validationState === 'validated' && (
+              <p className="text-sm text-emerald-400 flex items-center gap-2">
+                <Check className="w-4 h-4" />
+                Confirmed by validator.
+              </p>
+            )}
+
+            {validationState === 'rejected' && (
+              <p className="text-sm text-destructive flex items-center gap-2">
+                <ThumbsDown className="w-4 h-4" />
+                Marked for further review.
+              </p>
+            )}
           </div>
         )}
       </div>

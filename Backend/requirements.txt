@@ -45,7 +45,7 @@ et_xmlfile==2.0.0
 eval_type_backport==0.2.2
 exceptiongroup==1.2.2
 executing==2.1.0
-faiss-cpu==1.10.0
+faiss-cpu==1.13.2
 fastapi==0.115.11
 fastembed==0.6.1
 fastjsonschema==2.21.1
@@ -149,7 +149,7 @@ nltk==3.9.1
 olefile==0.47
 omegaconf==2.3.0
 onnx==1.17.0
-onnxruntime==1.21.0
+onnxruntime==1.26.0
 openai==1.66.3
 opencv-python==4.11.0.86
 opencv-python-headless==4.11.0.86

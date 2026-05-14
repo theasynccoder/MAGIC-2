@@ -49,6 +49,9 @@ export interface ChatMessage {
   timestamp: Date
   agentType?: string
   resultImage?: string
+  imageUrl?: string
+  needsValidation?: boolean
+  validationState?: 'pending' | 'validated' | 'rejected' | 'submitting'
 }
 
 export interface PredictionResult {
