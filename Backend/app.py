@@ -2,6 +2,7 @@ import os
 import random
 import uuid
 import tempfile
+from datetime import datetime
 from typing import Dict, Union, Optional, List
 import glob
 import threading
@@ -22,6 +23,16 @@ from elevenlabs.client import ElevenLabs
 from config import Config
 from agents.agent_decision import process_query
 from agents.image_analysis_agent.blood_tissue_pathology_agent.pathology_inference import BloodTissuePathologyClassifier
+from auth import (
+    COOKIE_NAME,
+    JWT_EXPIRY_DAYS,
+    create_token,
+    get_current_user,
+    get_optional_user,
+    hash_password,
+    verify_password,
+)
+from db import Conversation, Message, SessionLocal, User
 
 # Load configuration
 config = Config()
@@ -117,10 +128,174 @@ def resolve_voice_id(requested_voice_id: Optional[str]) -> str:
 class QueryRequest(BaseModel):
     query: str
     conversation_history: List = []
+    conversation_id: Optional[int] = None
 
 class SpeechRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
+
+
+class SignupRequest(BaseModel):
+    email: str
+    name: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _user_dict(user: User) -> Dict:
+    return {"id": user.id, "email": user.email, "name": user.name}
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=JWT_EXPIRY_DAYS * 24 * 60 * 60,
+        path="/",
+    )
+
+
+def _serialize_message(m: Message) -> Dict:
+    return {
+        "id": str(m.id),
+        "role": m.role,
+        "content": m.content,
+        "timestamp": m.created_at.isoformat() + "Z",
+        "agentType": m.agent_type,
+        "imageUrl": m.image_url,
+        "resultImage": m.result_image,
+    }
+
+
+def _serialize_conversation(c: Conversation, include_messages: bool = False) -> Dict:
+    data = {
+        "id": c.id,
+        "title": c.title,
+        "created_at": c.created_at.isoformat() + "Z",
+        "updated_at": c.updated_at.isoformat() + "Z",
+    }
+    if include_messages:
+        data["messages"] = [_serialize_message(m) for m in c.messages]
+    return data
+
+
+def _ensure_conversation(
+    db, user: User, conversation_id: Optional[int], first_user_text: str
+) -> Conversation:
+    if conversation_id is not None:
+        conv = db.get(Conversation, conversation_id)
+        if conv is None or conv.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conv
+
+    title = (first_user_text or "New chat").strip().splitlines()[0] if first_user_text else "New chat"
+    if len(title) > 60:
+        title = title[:57] + "..."
+    conv = Conversation(user_id=user.id, title=title or "New chat")
+    db.add(conv)
+    db.flush()
+    return conv
+
+
+@app.post("/auth/signup")
+def auth_signup(payload: SignupRequest, response: Response):
+    email = payload.email.strip().lower()
+    name = payload.name.strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    db = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.email == email).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+        user = User(email=email, name=name, password_hash=hash_password(payload.password))
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    finally:
+        db.close()
+
+    token = create_token(user.id)
+    _set_auth_cookie(response, token)
+    return {"user": _user_dict(user)}
+
+
+@app.post("/auth/login")
+def auth_login(payload: LoginRequest, response: Response):
+    email = payload.email.strip().lower()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not verify_password(payload.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        token = create_token(user.id)
+        _set_auth_cookie(response, token)
+        return {"user": _user_dict(user)}
+    finally:
+        db.close()
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(key=COOKIE_NAME, path="/")
+    return {"status": "ok"}
+
+
+@app.get("/auth/me")
+def auth_me(user: User = Depends(get_current_user)):
+    return {"user": _user_dict(user)}
+
+
+@app.get("/conversations")
+def list_conversations(user: User = Depends(get_current_user)):
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Conversation)
+            .filter(Conversation.user_id == user.id)
+            .order_by(Conversation.updated_at.desc())
+            .all()
+        )
+        return {"conversations": [_serialize_conversation(c) for c in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/conversations/{conversation_id}")
+def get_conversation(conversation_id: int, user: User = Depends(get_current_user)):
+    db = SessionLocal()
+    try:
+        conv = db.get(Conversation, conversation_id)
+        if conv is None or conv.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"conversation": _serialize_conversation(conv, include_messages=True)}
+    finally:
+        db.close()
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: int, user: User = Depends(get_current_user)):
+    db = SessionLocal()
+    try:
+        conv = db.get(Conversation, conversation_id)
+        if conv is None or conv.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        db.delete(conv)
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -134,126 +309,199 @@ def health_check():
 
 @app.post("/chat")
 def chat(
-    request: QueryRequest, 
-    response: Response, 
-    session_id: Optional[str] = Cookie(None)
+    request: QueryRequest,
+    response: Response,
+    session_id: Optional[str] = Cookie(None),
+    user: Optional[User] = Depends(get_optional_user),
 ):
     """Process user text query through the multi-agent system."""
-    # Generate session ID for cookie if it doesn't exist
     if not session_id:
         session_id = str(uuid.uuid4())
-    
+
+    response.set_cookie(key="session_id", value=session_id)
+
+    response_text: str
+    agent_name: str
+    result_image: Optional[str] = None
+    raise_500: Optional[str] = None
+
     try:
         response_data = process_query(request.query)
         response_text = extract_text_from_content(response_data['messages'][-1].content)
-        
-        # Set session cookie
-        response.set_cookie(key="session_id", value=session_id)
+        agent_name = response_data["agent_name"]
 
-        # Check if the agent is skin lesion segmentation and find the image path
-        result = {
-            "status": "success",
-            "response": response_text, 
-            "agent": response_data["agent_name"]
-        }
-        
-        # If it's the skin lesion segmentation agent, check for output image
-        if response_data["agent_name"] == "SKIN_LESION_AGENT, HUMAN_VALIDATION":
+        if agent_name == "SKIN_LESION_AGENT, HUMAN_VALIDATION":
             segmentation_path = os.path.join(SKIN_LESION_OUTPUT, "segmentation_plot.png")
             if os.path.exists(segmentation_path):
-                result["result_image"] = f"/uploads/skin_lesion_output/segmentation_plot.png"
+                result_image = "/uploads/skin_lesion_output/segmentation_plot.png"
             else:
                 print("Skin Lesion Output path does not exist.")
-        
-        return result
     except Exception as e:
         error_str = str(e)
         if "429" in error_str or "quota" in error_str.lower() or "Too Many Requests" in error_str:
-            return {"status": "success", "response": "External API Rate limit exceeded. Please wait a few moments and try again.", "agent": "System"}
-        raise HTTPException(status_code=500, detail=error_str)
+            response_text = "External API Rate limit exceeded. Please wait a few moments and try again."
+            agent_name = "System"
+        else:
+            raise_500 = error_str
+            response_text = f"An error occurred: {error_str}"
+            agent_name = "System"
+
+    result = {
+        "status": "success" if raise_500 is None else "error",
+        "response": response_text,
+        "agent": agent_name,
+    }
+    if result_image:
+        result["result_image"] = result_image
+
+    if user is not None:
+        db = SessionLocal()
+        try:
+            conv = _ensure_conversation(db, user, request.conversation_id, request.query)
+            db.add(Message(conversation_id=conv.id, role="user", content=request.query))
+            db.add(
+                Message(
+                    conversation_id=conv.id,
+                    role="assistant",
+                    content=response_text,
+                    agent_type=agent_name,
+                    result_image=result_image,
+                )
+            )
+            conv.updated_at = datetime.utcnow()
+            db.commit()
+            result["conversation_id"] = conv.id
+        finally:
+            db.close()
+
+    if raise_500:
+        raise HTTPException(status_code=500, detail=raise_500)
+
+    return result
 
 @app.post("/upload")
 async def upload_image(
     response: Response,
-    image: UploadFile = File(...), 
+    image: UploadFile = File(...),
     text: str = Form(""),
-    session_id: Optional[str] = Cookie(None)
+    conversation_id: Optional[int] = Form(None),
+    session_id: Optional[str] = Cookie(None),
+    user: Optional[User] = Depends(get_optional_user),
 ):
     """Process medical image uploads with optional text input."""
-    # Validate file type
     if not allowed_file(image.filename):
         return JSONResponse(
-            status_code=400, 
+            status_code=400,
             content={
                 "status": "error",
                 "agent": "System",
                 "response": "Unsupported file type. Allowed formats: PNG, JPG, JPEG"
             }
         )
-    
-    # Check file size before saving
+
     file_content = await image.read()
-    if len(file_content) > config.api.max_image_upload_size * 1024 * 1024:  # Convert MB to bytes
+    if len(file_content) > config.api.max_image_upload_size * 1024 * 1024:
         return JSONResponse(
-            status_code=413, 
+            status_code=413,
             content={
                 "status": "error",
                 "agent": "System",
                 "response": f"File too large. Maximum size allowed: {config.api.max_image_upload_size}MB"
             }
         )
-    
-    # Generate session ID for cookie if it doesn't exist
+
     if not session_id:
         session_id = str(uuid.uuid4())
-    
-    # Save file securely
+
     filename = secure_filename(f"{uuid.uuid4()}_{image.filename}")
     file_path = os.path.join(UPLOAD_FOLDER, filename)
     with open(file_path, "wb") as f:
         f.write(file_content)
-    
+
+    persistent_image_url: Optional[str] = None
+    if user is not None:
+        persistent_filename = secure_filename(f"{uuid.uuid4()}_{image.filename}")
+        persistent_path = os.path.join(FRONTEND_UPLOAD_FOLDER, persistent_filename)
+        with open(persistent_path, "wb") as f:
+            f.write(file_content)
+        persistent_image_url = f"/uploads/frontend/{persistent_filename}"
+
+    response.set_cookie(key="session_id", value=session_id)
+
+    response_text: str
+    agent_name: str
+    result_image: Optional[str] = None
+    raise_500: Optional[str] = None
+
     try:
         query = {"text": text, "image": file_path}
         response_data = process_query(query)
         response_text = extract_text_from_content(response_data['messages'][-1].content)
+        agent_name = response_data["agent_name"]
 
-        # Set session cookie
-        response.set_cookie(key="session_id", value=session_id)
-
-        # Check if the agent is skin lesion segmentation and find the image path
-        result = {
-            "status": "success",
-            "response": response_text, 
-            "agent": response_data["agent_name"]
-        }
-        
-        # If it's the skin lesion segmentation agent, check for output image
-        if response_data["agent_name"] == "SKIN_LESION_AGENT, HUMAN_VALIDATION":
+        if agent_name == "SKIN_LESION_AGENT, HUMAN_VALIDATION":
             segmentation_path = os.path.join(SKIN_LESION_OUTPUT, "segmentation_plot.png")
             if os.path.exists(segmentation_path):
-                result["result_image"] = f"/uploads/skin_lesion_output/segmentation_plot.png"
+                result_image = "/uploads/skin_lesion_output/segmentation_plot.png"
             else:
                 print("Skin Lesion Output path does not exist.")
-        
-        # Remove temporary file after sending
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            print(f"Failed to remove temporary file: {str(e)}")
-        
-        return result
     except Exception as e:
         error_str = str(e)
-        # Also clean up file if possible
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except:
-            pass
         if "429" in error_str or "quota" in error_str.lower() or "Too Many Requests" in error_str:
-            return {"status": "success", "response": "External API Rate limit exceeded while trying to analyze the image.", "agent": "System"}
-        raise HTTPException(status_code=500, detail=error_str)
+            response_text = "External API Rate limit exceeded while trying to analyze the image."
+            agent_name = "System"
+        else:
+            raise_500 = error_str
+            response_text = f"An error occurred while analyzing the image: {error_str}"
+            agent_name = "System"
+
+    result = {
+        "status": "success" if raise_500 is None else "error",
+        "response": response_text,
+        "agent": agent_name,
+    }
+    if result_image:
+        result["result_image"] = result_image
+
+    if user is not None:
+        db = SessionLocal()
+        try:
+            conv = _ensure_conversation(db, user, conversation_id, text or "Image analysis")
+            db.add(
+                Message(
+                    conversation_id=conv.id,
+                    role="user",
+                    content=text or "(image attached)",
+                    image_url=persistent_image_url,
+                )
+            )
+            db.add(
+                Message(
+                    conversation_id=conv.id,
+                    role="assistant",
+                    content=response_text,
+                    agent_type=agent_name,
+                    result_image=result_image,
+                )
+            )
+            conv.updated_at = datetime.utcnow()
+            db.commit()
+            result["conversation_id"] = conv.id
+            if persistent_image_url:
+                result["user_image_url"] = persistent_image_url
+        finally:
+            db.close()
+
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print(f"Failed to remove temporary file: {str(e)}")
+
+    if raise_500:
+        raise HTTPException(status_code=500, detail=raise_500)
+
+    return result
 
 @app.post("/predict-medical")
 async def predict_medical(image: UploadFile = File(...)):

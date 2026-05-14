@@ -67,14 +67,48 @@ export interface ChatResponse {
   response: string
   agent: string
   result_image?: string
+  conversation_id?: number
+  user_image_url?: string
+}
+
+export interface AuthUser {
+  id: number
+  email: string
+  name: string
+}
+
+export interface ConversationSummary {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PersistedMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+  agentType?: string | null
+  imageUrl?: string | null
+  resultImage?: string | null
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: PersistedMessage[]
 }
 
 // Chat API - connects to /chat endpoint
 export const chatApi = {
-  sendMessage: async (query: string, conversationHistory: ChatMessage[] = []) => {
+  sendMessage: async (
+    query: string,
+    conversationHistory: ChatMessage[] = [],
+    conversationId?: number
+  ) => {
     const response = await api.post<ChatResponse>('/chat', {
       query,
       conversation_history: conversationHistory,
+      conversation_id: conversationId,
     })
     return response.data
   },
@@ -82,17 +116,54 @@ export const chatApi = {
 
 // Upload API - connects to /upload endpoint
 export const uploadApi = {
-  uploadAndAnalyze: async (file: File, text: string = '') => {
+  uploadAndAnalyze: async (file: File, text: string = '', conversationId?: number) => {
     const formData = new FormData()
     formData.append('image', file)
     if (text) {
       formData.append('text', text)
     }
-    
+    if (conversationId !== undefined) {
+      formData.append('conversation_id', String(conversationId))
+    }
+
     const response = await api.post<ChatResponse>('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     return response.data
+  },
+}
+
+// Auth API
+export const authApi = {
+  signup: async (email: string, name: string, password: string) => {
+    const response = await api.post<{ user: AuthUser }>('/auth/signup', { email, name, password })
+    return response.data.user
+  },
+  login: async (email: string, password: string) => {
+    const response = await api.post<{ user: AuthUser }>('/auth/login', { email, password })
+    return response.data.user
+  },
+  logout: async () => {
+    await api.post('/auth/logout')
+  },
+  me: async () => {
+    const response = await api.get<{ user: AuthUser }>('/auth/me')
+    return response.data.user
+  },
+}
+
+// Conversations API
+export const conversationsApi = {
+  list: async () => {
+    const response = await api.get<{ conversations: ConversationSummary[] }>('/conversations')
+    return response.data.conversations
+  },
+  get: async (id: number) => {
+    const response = await api.get<{ conversation: ConversationDetail }>(`/conversations/${id}`)
+    return response.data.conversation
+  },
+  remove: async (id: number) => {
+    await api.delete(`/conversations/${id}`)
   },
 }
 

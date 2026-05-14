@@ -16,15 +16,33 @@ import {
   Mic,
   Square,
   X,
+  Loader2,
 } from 'lucide-react'
 import Image from 'next/image'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ChatMessage, TypingIndicator } from '@/components/chat-message'
+import { ChatHistorySidebar } from '@/components/chat-history-sidebar'
 import { cn } from '@/lib/utils'
-import { chatApi, uploadApi, audioApi, validationApi, type ChatMessage as ChatMessageType } from '@/lib/api'
+import {
+  chatApi,
+  uploadApi,
+  audioApi,
+  validationApi,
+  conversationsApi,
+  type ChatMessage as ChatMessageType,
+} from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
+
+const toAbsoluteUrl = (path?: string | null): string | undefined => {
+  if (!path) return undefined
+  if (/^https?:\/\//i.test(path)) return path
+  return `${API_BASE}${path.startsWith('/') ? '' : '/'}${path}`
+}
 
 const agents = [
   { id: 'medical-chat', name: 'Medical Chat', icon: MessageSquare, color: 'text-primary' },
@@ -42,9 +60,11 @@ const suggestedPrompts = [
 ]
 
 export default function ChatPage() {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const initialAgent = searchParams.get('agent') || 'medical-chat'
-  
+  const { user, loading: authLoading } = useAuth()
+
   const [messages, setMessages] = useState<ChatMessageType[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -54,11 +74,57 @@ export default function ChatPage() {
   const [filePreview, setFilePreview] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
+  const [conversationId, setConversationId] = useState<number | null>(null)
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
+  const [loadingConversation, setLoadingConversation] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.replace('/login?redirect=/chat')
+    }
+  }, [authLoading, user, router])
+
+  const loadConversation = useCallback(async (id: number) => {
+    try {
+      setLoadingConversation(true)
+      setError(null)
+      const conv = await conversationsApi.get(id)
+      const loaded: ChatMessageType[] = conv.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: new Date(m.timestamp),
+        agentType: m.agentType || undefined,
+        imageUrl: toAbsoluteUrl(m.imageUrl ?? undefined),
+        resultImage: toAbsoluteUrl(m.resultImage ?? undefined),
+      }))
+      setMessages(loaded)
+      setConversationId(conv.id)
+    } catch (err) {
+      console.error('Load conversation error:', err)
+      setError(err instanceof Error ? err.message : 'Failed to load conversation')
+    } finally {
+      setLoadingConversation(false)
+    }
+  }, [])
+
+  const startNewChat = useCallback(() => {
+    setMessages([])
+    setConversationId(null)
+    setInput('')
+    setError(null)
+    setSelectedFile(null)
+    setFilePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [])
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -185,8 +251,8 @@ export default function ChatPage() {
 
     try {
       const response = fileToSend
-        ? await uploadApi.uploadAndAnalyze(fileToSend, textToSend)
-        : await chatApi.sendMessage(textToSend, messages)
+        ? await uploadApi.uploadAndAnalyze(fileToSend, textToSend, conversationId ?? undefined)
+        : await chatApi.sendMessage(textToSend, messages, conversationId ?? undefined)
 
       const needsValidation = response.agent?.includes('HUMAN_VALIDATION') ?? false
       const aiMessage: ChatMessageType = {
@@ -195,14 +261,32 @@ export default function ChatPage() {
         content: response.response,
         timestamp: new Date(),
         agentType: response.agent,
-        resultImage: response.result_image
-          ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}${response.result_image}`
-          : undefined,
+        resultImage: toAbsoluteUrl(response.result_image),
         needsValidation,
         validationState: needsValidation ? 'pending' : undefined,
       }
 
+      if (response.user_image_url) {
+        const persistentUrl = toAbsoluteUrl(response.user_image_url)
+        setMessages((prev) => {
+          const updated = [...prev]
+          const lastUserIdx = [...updated].reverse().findIndex((m) => m.role === 'user')
+          if (lastUserIdx >= 0) {
+            const idx = updated.length - 1 - lastUserIdx
+            updated[idx] = { ...updated[idx], imageUrl: persistentUrl }
+          }
+          return updated
+        })
+      }
+
       setMessages((prev) => [...prev, aiMessage])
+
+      if (response.conversation_id !== undefined) {
+        const isNew = conversationId === null
+        setConversationId(response.conversation_id)
+        if (isNew) setHistoryRefreshKey((k) => k + 1)
+        else setHistoryRefreshKey((k) => k + 1)
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
       setError(errorMessage)
@@ -257,14 +341,31 @@ export default function ChatPage() {
   }
 
   const clearChat = () => {
-    setMessages([])
-    setError(null)
+    startNewChat()
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return null
   }
 
   return (
     <div className="flex h-screen">
+      <ChatHistorySidebar
+        activeId={conversationId}
+        refreshKey={historyRefreshKey}
+        onSelect={(id) => loadConversation(id)}
+        onNewChat={startNewChat}
+      />
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-card/50">
           <div className="flex items-center gap-3">
