@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { Activity, Menu, X } from 'lucide-react'
+import { Activity, Menu, X, LogOut } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/lib/auth-context'
 
 const navLinks = [
   { href: '/', label: 'Home' },
@@ -19,6 +20,7 @@ const navLinks = [
 export function Navbar() {
   const pathname = usePathname()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const { user, logout } = useAuth()
 
   return (
     <motion.header
@@ -63,10 +65,30 @@ export function Navbar() {
           </div>
 
           {/* CTA Button */}
-          <div className="hidden md:flex items-center gap-4">
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/dashboard">Get Started</Link>
-            </Button>
+          <div className="hidden md:flex items-center gap-2">
+            {user ? (
+              <>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/40 text-sm">
+                  <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-semibold">
+                    {user.name.charAt(0).toUpperCase()}
+                  </div>
+                  <span className="text-foreground/80">{user.name}</span>
+                </div>
+                <Button variant="ghost" size="sm" onClick={logout} className="gap-1">
+                  <LogOut className="w-4 h-4" />
+                  Sign out
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/login">Sign in</Link>
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/signup">Get Started</Link>
+                </Button>
+              </>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
