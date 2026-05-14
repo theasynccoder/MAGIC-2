@@ -11,19 +11,12 @@ Each llm definition has unique temperature value relevant to the specific class.
 """
 
 import os
-from functools import lru_cache
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # Load environment variables from .env file
 load_dotenv(override=True)
-
-
-@lru_cache(maxsize=1)
-def get_shared_hf_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-    """Return a single shared embedding model instance for the process."""
-    return HuggingFaceEmbeddings(model_name=model_name)
 
 class AgentDecisoinConfig:
     def __init__(self):
@@ -136,7 +129,9 @@ class RAGConfig:
         self.chunk_size = 512  # Modify based on documents and performance
         self.chunk_overlap = 50  # Modify based on documents and performance
         # Initialize local HuggingFace embeddings (no external LLM calls)
-        self.embedding_model = get_shared_hf_embeddings("sentence-transformers/all-MiniLM-L6-v2")
+        self.embedding_model = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
         self.llm = ChatGoogleGenerativeAI(
             model = os.getenv("model_name", "gemini-1.5-flash"),  # Gemini model name
             google_api_key = os.getenv("GOOGLE_API_KEY"),  # Google API key
@@ -245,12 +240,6 @@ class Config:
         self.eleven_labs_api_key = os.getenv("ELEVEN_LABS_API_KEY")
         self.tavily_api_key = os.getenv("TAVILY_API_KEY")
         self.max_conversation_history = 20  # Include last 20 messsages (10 Q&A pairs) in history
-
-
-@lru_cache(maxsize=1)
-def get_config() -> Config:
-    """Return one shared Config instance per process."""
-    return Config()
 
 # # Example usage
 # config = Config()

@@ -19,12 +19,12 @@ from werkzeug.utils import secure_filename
 from pydub import AudioSegment
 from elevenlabs.client import ElevenLabs
 
-from config import get_config
+from config import Config
 from agents.agent_decision import process_query
 from agents.image_analysis_agent.blood_tissue_pathology_agent.pathology_inference import BloodTissuePathologyClassifier
 
 # Load configuration
-config = get_config()
+config = Config()
 
 # Initialize FastAPI app
 app = FastAPI(title="Multi-Agent Medical Chatbot", version="2.0")

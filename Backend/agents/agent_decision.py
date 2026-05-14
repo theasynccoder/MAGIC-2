@@ -25,7 +25,7 @@ from langgraph.checkpoint.memory import MemorySaver
 import cv2
 import numpy as np
 
-from config import get_config
+from config import Config
 
 load_dotenv()
 
@@ -45,7 +45,7 @@ def extract_text_content(content):
     return str(content)
 
 # Load configuration
-config = get_config()
+config = Config()
 
 # Initialize memory
 memory = MemorySaver()
@@ -86,7 +86,7 @@ class AgentConfig:
     Make your decision based on these guidelines:
     - If the user has not uploaded any image, always route to the conversation agent.
     - If the user uploads a medical image, decide which medical vision agent is appropriate based on the image type and the user's query. If the image is uploaded without a query, always route to the correct medical vision agent based on the image type.
-    - EXTREMELY IMPORTANT: If the user uploads a microscopic tissue/pathology slide (like lung tissue) or a blood smear, or if the user's query contains the word "pathology" (e.g., "lung pathology", "pathological disease"), ALWAYS route to MEDICAL_PATHOLOGY_AGENT. Do NOT route to CHEST_XRAY_AGENT even if the user mentions "covid", "pneumonia", or lung diseases. CHEST_XRAY_AGENT is ONLY for macro-level chest radiograph scans (X-Rays).
+    - If the image is a blood smear or tissue pathology slide, prefer MEDICAL_PATHOLOGY_AGENT.
     - If the user asks about recent medical developments or current health situations, use the web search pocessor agent.
     - If the user asks specific medical knowledge questions, use the RAG agent.
     - For general conversation, greetings, or non-medical questions, use the conversation agent. But if image is uploaded, always go to the medical vision agents first.
@@ -179,7 +179,7 @@ def create_agent_graph():
 
         # Check input through guardrails if text is present
         if input_text:
-            medical_image_intent = has_image and image_type in {"BRAIN MRI SCAN", "CHEST X-RAY", "SKIN LESION", "BLOOD SMEAR", "PATHOLOGY SLIDE"}
+            medical_image_intent = has_image and image_type in {"BRAIN MRI SCAN", "CHEST X-RAY", "SKIN LESION", "BLOOD SMEAR"}
 
             # Relax input guardrails for valid medical image-analysis intents,
             # while still blocking explicit harmful/illegal/self-harm requests.
@@ -236,7 +236,7 @@ def create_agent_graph():
                 recent_context += f"Assistant: {msg.content}\n"
         
         # Hard routing for blood/tissue pathology images
-        if has_image and (image_type in ["BLOOD SMEAR", "PATHOLOGY SLIDE", "PATHOLOGY", "BLOOD", "TISSUE"] or "pathology" in str(current_input).lower()):
+        if has_image and image_type in ["BLOOD SMEAR", "PATHOLOGY", "BLOOD", "TISSUE"]:
             updated_state = {
                 **state,
                 "agent_name": "MEDICAL_PATHOLOGY_AGENT",

@@ -43,8 +43,7 @@ class ImageClassifier:
                 {"type": "text", "text": (
                     """
                     Determine if this is a medical image. If it is, classify it as exactly one of:
-                    'BRAIN MRI SCAN', 'CHEST X-RAY', 'SKIN LESION', 'PATHOLOGY SLIDE', 'BLOOD SMEAR', or 'OTHER'.
-                    Note: Microscopic tissue samples (like lung tissue) and blood samples should be classified as 'PATHOLOGY SLIDE' or 'BLOOD SMEAR'.
+                    'BRAIN MRI SCAN', 'CHEST X-RAY', 'SKIN LESION', 'BLOOD SMEAR', or 'OTHER'.
                     If it's not a medical image, return 'NON-MEDICAL'.
                     You must provide your answer in JSON format with the following structure:
                     {{

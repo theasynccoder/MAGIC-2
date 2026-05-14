@@ -48,6 +48,7 @@ export interface ChatMessage {
   content: string
   timestamp: Date
   agentType?: string
+  resultImage?: string
 }
 
 export interface PredictionResult {

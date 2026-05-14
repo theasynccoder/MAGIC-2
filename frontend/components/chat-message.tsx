@@ -1,27 +1,59 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Bot, User, Copy, Check } from 'lucide-react'
+import { Bot, User, Copy, Check, Volume2, RotateCw } from 'lucide-react'
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import Image from 'next/image'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { audioApi } from '@/lib/api'
 
 interface ChatMessageProps {
   role: 'user' | 'assistant'
   content: string
   timestamp?: Date
   isStreaming?: boolean
+  agentType?: string
+  resultImage?: string
 }
 
-export function ChatMessage({ role, content, timestamp, isStreaming }: ChatMessageProps) {
+export function ChatMessage({ role, content, timestamp, isStreaming, agentType, resultImage }: ChatMessageProps) {
   const [copied, setCopied] = useState(false)
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const isUser = role === 'user'
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(content)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleTextToSpeech = async () => {
+    try {
+      setIsPlayingAudio(true)
+      
+      if (audioUrl) {
+        // If we already have an audio URL, just play it
+        const audio = new Audio(audioUrl)
+        audio.play()
+        audio.onended = () => setIsPlayingAudio(false)
+        return
+      }
+
+      // Generate speech from text
+      const audioBlob = await audioApi.generateSpeech(content)
+      const url = URL.createObjectURL(audioBlob)
+      setAudioUrl(url)
+
+      const audio = new Audio(url)
+      audio.play()
+      audio.onended = () => setIsPlayingAudio(false)
+    } catch (error) {
+      console.error('Error generating speech:', error)
+      setIsPlayingAudio(false)
+    }
   }
 
   return (
@@ -36,7 +68,7 @@ export function ChatMessage({ role, content, timestamp, isStreaming }: ChatMessa
     >
       {/* Avatar */}
       <div className={cn(
-        'flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center',
+        'shrink-0 w-8 h-8 rounded-lg flex items-center justify-center',
         isUser ? 'bg-primary/20 text-primary' : 'bg-accent/20 text-accent'
       )}>
         {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
@@ -46,7 +78,7 @@ export function ChatMessage({ role, content, timestamp, isStreaming }: ChatMessa
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-sm font-medium text-foreground">
-            {isUser ? 'You' : 'MAGIC AI'}
+            {isUser ? 'You' : agentType ? `${agentType}` : 'MAGIC AI'}
           </span>
           {timestamp && (
             <span className="text-xs text-muted-foreground">
@@ -89,16 +121,47 @@ export function ChatMessage({ role, content, timestamp, isStreaming }: ChatMessa
             {content}
           </ReactMarkdown>
         </div>
+
+        {/* Result Image Display */}
+        {resultImage && !isUser && (
+          <div className="mt-3 rounded-lg overflow-hidden bg-secondary/30 p-2">
+            <div className="relative w-full max-w-sm h-auto">
+              <Image
+                src={resultImage}
+                alt="Analysis result"
+                width={400}
+                height={400}
+                className="w-full h-auto rounded"
+                unoptimized
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Actions */}
       {!isUser && !isStreaming && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleTextToSpeech}
+            disabled={isPlayingAudio}
+            className="text-muted-foreground hover:text-foreground"
+            title="Read message aloud"
+          >
+            {isPlayingAudio ? (
+              <RotateCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Volume2 className="w-4 h-4" />
+            )}
+          </Button>
           <Button
             variant="ghost"
             size="icon-sm"
             onClick={handleCopy}
             className="text-muted-foreground hover:text-foreground"
+            title="Copy message"
           >
             {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
           </Button>
@@ -115,7 +178,7 @@ export function TypingIndicator() {
       animate={{ opacity: 1, y: 0 }}
       className="flex gap-4 p-4 rounded-xl bg-card"
     >
-      <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center bg-accent/20 text-accent">
+      <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center bg-accent/20 text-accent">
         <Bot className="w-4 h-4" />
       </div>
       <div className="flex items-center gap-1 pt-2">

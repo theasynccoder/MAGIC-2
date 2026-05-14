@@ -72,22 +72,6 @@ class VectorStore:
         # self.client = QdrantClientManager.get_client(config)
         self.client = QdrantClient(path=self.vectorstore_local_path)
 
-    def _build_sparse_embeddings(self):
-        """Return sparse embedding backend if available, otherwise None.
-
-        This keeps RAG functional in dense-only mode when optional `fastembed`
-        runtime dependency is missing in the active Python environment.
-        """
-        try:
-            return FastEmbedSparse(model_name="Qdrant/bm25")
-        except Exception as e:
-            self.logger.warning(
-                "FastEmbed sparse backend unavailable; falling back to dense retrieval only. "
-                "Install fastembed in the active environment to enable hybrid retrieval. "
-                f"Reason: {e}"
-            )
-            return None
-
     def _does_collection_exist(self) -> bool:
         """Check if the collection already exists in Qdrant."""
         try:
@@ -125,9 +109,8 @@ class VectorStore:
             self.logger.error(f"Collection {self.collection_name} does not exist. Please ingest documents first.")
             raise ValueError(f"Collection {self.collection_name} does not exist")
             
-        # Setup sparse embeddings when available; otherwise use dense-only retrieval.
-        sparse_embeddings = self._build_sparse_embeddings()
-        retrieval_mode = RetrievalMode.HYBRID if sparse_embeddings else RetrievalMode.DENSE
+        # Setup sparse embeddings
+        sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
         
         # Initialize vector store
         qdrant_vectorstore = QdrantVectorStore(
@@ -135,7 +118,7 @@ class VectorStore:
             collection_name=self.collection_name,
             embedding=self.embedding_model,
             sparse_embedding=sparse_embeddings,
-            retrieval_mode=retrieval_mode,
+            retrieval_mode=RetrievalMode.HYBRID,
             vector_name="dense",
             sparse_vector_name="sparse",
         )
@@ -180,9 +163,8 @@ class VectorStore:
                 )
             )
         
-        # Setup sparse embeddings when available; otherwise use dense-only retrieval.
-        sparse_embeddings = self._build_sparse_embeddings()
-        retrieval_mode = RetrievalMode.HYBRID if sparse_embeddings else RetrievalMode.DENSE
+        # Setup sparse embeddings
+        sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
         
         # Check if collection exists, create if it doesn't
         collection_exists = self._does_collection_exist()
@@ -198,7 +180,7 @@ class VectorStore:
             collection_name=self.collection_name,
             embedding=self.embedding_model,
             sparse_embedding=sparse_embeddings,
-            retrieval_mode=retrieval_mode,
+            retrieval_mode=RetrievalMode.HYBRID,
             vector_name="dense",
             sparse_vector_name="sparse",
         )

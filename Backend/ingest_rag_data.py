@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 # Import your components
 from agents.rag_agent import MedicalRAG
-from config import get_config
+from config import Config
 
 import argparse
 
@@ -29,7 +29,7 @@ parser.add_argument("--dir", type=str, required=False, help="Enter directory pat
 args = parser.parse_args()
 
 # Load configuration
-config = get_config()
+config = Config()
 
 rag = MedicalRAG(config)
 
