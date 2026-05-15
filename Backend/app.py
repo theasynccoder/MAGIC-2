@@ -133,6 +133,44 @@ class QueryRequest(BaseModel):
 class SpeechRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
+    language: Optional[str] = "en"  # "en" | "hi" | "kn"
+
+
+class TranslateRequest(BaseModel):
+    text: str
+    target_lang: str  # "hi" | "kn" | "en"
+
+
+LANG_NAMES = {
+    "en": "English",
+    "hi": "Hindi",
+    "kn": "Kannada",
+}
+
+
+def translate_text(text: str, target_lang: str) -> str:
+    """Translate `text` into the target language using the configured Gemini model.
+    Returns the original text untouched when target_lang is English or empty.
+    """
+    code = (target_lang or "en").lower()
+    if code in ("en", "english") or not text.strip():
+        return text
+    lang_name = LANG_NAMES.get(code, target_lang)
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage
+    llm = ChatGoogleGenerativeAI(
+        model=os.getenv("model_name", "gemini-2.5-flash-lite"),
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
+        temperature=0.0,
+    )
+    prompt = (
+        f"Translate the following medical assistant message into {lang_name}.\n"
+        "Keep the meaning faithful and the structure (bullets, headings) intact.\n"
+        "Do not add commentary or preamble. Return only the translated text.\n\n"
+        f"Text:\n{text}"
+    )
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return extract_text_from_content(response.content)
 
 
 class SignupRequest(BaseModel):
@@ -637,18 +675,25 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         print(f"Transcription error: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.post("/translate")
+def translate_endpoint(request: TranslateRequest):
+    """Translate a text payload to the requested target language."""
+    try:
+        translated = translate_text(request.text, request.target_lang)
+        return {"translated_text": translated, "target_lang": request.target_lang}
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": f"Translation failed: {str(e)}"})
+
+
 @app.post("/generate-speech")
 async def generate_speech(request: SpeechRequest):
-    """Endpoint to generate speech using ElevenLabs API"""
+    """Generate speech via ElevenLabs. Optionally translate before synthesis."""
     selected_voice_id = ""
+    language = (request.language or "en").lower()
     try:
         text = request.text.strip()
-        
         if not text:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Text is required"}
-            )
+            return JSONResponse(status_code=400, content={"error": "Text is required"})
 
         if not config.speech.eleven_labs_api_key:
             return JSONResponse(
@@ -656,18 +701,43 @@ async def generate_speech(request: SpeechRequest):
                 content={"error": "ELEVEN_LABS_API_KEY is not configured"}
             )
 
+        if language not in ("en", "english"):
+            try:
+                text = translate_text(text, language)
+            except Exception as te:
+                return JSONResponse(
+                    status_code=502,
+                    content={"error": f"Translation step failed: {str(te)}"}
+                )
+
         selected_voice_id = resolve_voice_id(request.voice_id)
 
-        audio_chunks = client.text_to_speech.convert(
+        # Languages eleven_multilingual_v2 accepts as a language_code hint.
+        # Languages outside this set (e.g. Kannada) still play if the model is given
+        # the translated text, but we must omit the hint to avoid a 400.
+        ELEVEN_MULTILINGUAL_V2_LANGS = {
+            "en", "ja", "zh", "de", "hi", "fr", "ko", "pt", "it", "es", "id",
+            "nl", "tr", "fil", "pl", "sv", "bg", "ro", "ar", "cs", "el", "fi",
+            "hr", "ms", "sk", "da", "ta", "uk", "ru", "vi",
+        }
+
+        convert_kwargs = dict(
             voice_id=selected_voice_id,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
             text=text,
-            voice_settings={
-                "stability": 0.5,
-                "similarity_boost": 0.5
-            }
+            voice_settings={"stability": 0.5, "similarity_boost": 0.5},
         )
+        # Only send language_code when the model supports it; otherwise we just feed translated text.
+        if language not in ("en", "english") and language in ELEVEN_MULTILINGUAL_V2_LANGS:
+            convert_kwargs["language_code"] = language
+
+        try:
+            audio_chunks = client.text_to_speech.convert(**convert_kwargs)
+        except TypeError:
+            convert_kwargs.pop("language_code", None)
+            audio_chunks = client.text_to_speech.convert(**convert_kwargs)
+
         audio_data = b"".join(audio_chunks)
 
         if not audio_data:

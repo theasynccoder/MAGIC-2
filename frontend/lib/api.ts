@@ -208,13 +208,20 @@ export const audioApi = {
     return response.data
   },
 
-  generateSpeech: async (text: string, voiceId?: string) => {
+  generateSpeech: async (text: string, voiceId?: string, language: 'en' | 'hi' | 'kn' = 'en') => {
     const response = await api.post(
       '/generate-speech',
-      { text, voice_id: voiceId },
+      { text, voice_id: voiceId, language },
       { responseType: 'blob' }
     )
     return response.data
+  },
+  translate: async (text: string, targetLang: 'en' | 'hi' | 'kn') => {
+    const response = await api.post<{ translated_text: string; target_lang: string }>(
+      '/translate',
+      { text, target_lang: targetLang }
+    )
+    return response.data.translated_text
   },
 }
 

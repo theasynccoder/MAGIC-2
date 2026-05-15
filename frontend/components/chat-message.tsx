@@ -1,14 +1,23 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Bot, User, Copy, Check, Volume2, RotateCw, ThumbsUp, ThumbsDown } from 'lucide-react'
-import { useState } from 'react'
+import { Bot, User, Copy, Check, Volume2, Pause, Play, RotateCw, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { audioApi } from '@/lib/api'
+
+type SpeechLang = 'en' | 'hi' | 'kn'
+type AudioState = 'idle' | 'fetching' | 'playing' | 'paused'
+
+const LANG_LABEL: Record<SpeechLang, string> = {
+  en: 'EN',
+  hi: 'हि',
+  kn: 'ಕ',
+}
 
 interface ChatMessageProps {
   role: 'user' | 'assistant'
@@ -27,9 +36,55 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
   const [showCommentBox, setShowCommentBox] = useState(false)
   const [commentText, setCommentText] = useState('')
   const [copied, setCopied] = useState(false)
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false)
-  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [audioState, setAudioState] = useState<AudioState>('idle')
+  const [language, setLanguage] = useState<SpeechLang>('en')
+  const [translations, setTranslations] = useState<Partial<Record<SpeechLang, string>>>({})
+  const [translating, setTranslating] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioUrlRef = useRef<string | null>(null)
   const isUser = role === 'user'
+
+  const displayContent =
+    language === 'en' ? content : translations[language] ?? content
+
+  // Fetch translation lazily on language switch (cached per language).
+  useEffect(() => {
+    if (isUser) return
+    if (language === 'en') return
+    if (translations[language]) return
+    if (!content.trim()) return
+
+    let cancelled = false
+    setTranslating(true)
+    audioApi
+      .translate(content, language)
+      .then((text) => {
+        if (!cancelled && text) {
+          setTranslations((prev) => ({ ...prev, [language]: text }))
+        }
+      })
+      .catch((err) => {
+        console.error('Translate error:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setTranslating(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [language, content, translations, isUser])
+
+  // Stop and clean up any in-flight audio when the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.src = ''
+      }
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+    }
+  }, [])
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(content)
@@ -37,29 +92,60 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleTextToSpeech = async () => {
-    try {
-      setIsPlayingAudio(true)
-      
-      if (audioUrl) {
-        // If we already have an audio URL, just play it
-        const audio = new Audio(audioUrl)
-        audio.play()
-        audio.onended = () => setIsPlayingAudio(false)
-        return
+  const resetAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.onended = null
+      audioRef.current.src = ''
+      audioRef.current = null
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current)
+      audioUrlRef.current = null
+    }
+    setAudioState('idle')
+  }
+
+  const handleLanguageChange = (lang: SpeechLang) => {
+    if (lang === language) return
+    resetAudio()
+    setLanguage(lang)
+  }
+
+  const handlePlayPause = async () => {
+    // Already playing → pause
+    if (audioState === 'playing' && audioRef.current) {
+      audioRef.current.pause()
+      setAudioState('paused')
+      return
+    }
+    // Paused → resume
+    if (audioState === 'paused' && audioRef.current) {
+      try {
+        await audioRef.current.play()
+        setAudioState('playing')
+      } catch (e) {
+        console.error('Audio resume error:', e)
+        setAudioState('idle')
       }
+      return
+    }
+    if (audioState === 'fetching') return
 
-      // Generate speech from text
-      const audioBlob = await audioApi.generateSpeech(content)
+    // Idle → fetch fresh audio. Backend handles translation when language !== 'en'.
+    try {
+      setAudioState('fetching')
+      const audioBlob = await audioApi.generateSpeech(content, undefined, language)
       const url = URL.createObjectURL(audioBlob)
-      setAudioUrl(url)
-
+      audioUrlRef.current = url
       const audio = new Audio(url)
-      audio.play()
-      audio.onended = () => setIsPlayingAudio(false)
+      audioRef.current = audio
+      audio.onended = () => setAudioState('idle')
+      await audio.play()
+      setAudioState('playing')
     } catch (error) {
       console.error('Error generating speech:', error)
-      setIsPlayingAudio(false)
+      setAudioState('idle')
     }
   }
 
@@ -96,6 +182,17 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
             <span className="flex items-center gap-1 text-xs text-primary">
               <span className="w-1.5 h-1.5 rounded-full bg-primary pulse-dot" />
               Typing...
+            </span>
+          )}
+          {!isUser && translating && (
+            <span className="flex items-center gap-1 text-xs text-primary">
+              <RotateCw className="w-3 h-3 animate-spin" />
+              Translating to {language === 'hi' ? 'Hindi' : 'Kannada'}...
+            </span>
+          )}
+          {!isUser && language !== 'en' && translations[language] && !translating && (
+            <span className="text-xs text-muted-foreground">
+              · Translated · <button type="button" onClick={() => handleLanguageChange('en')} className="text-primary hover:underline">Show English</button>
             </span>
           )}
         </div>
@@ -138,7 +235,7 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
               h3: ({ children }) => <h3 className="text-base font-bold mb-2 text-foreground">{children}</h3>,
             }}
           >
-            {content}
+            {displayContent}
           </ReactMarkdown>
         </div>
 
@@ -251,21 +348,58 @@ export function ChatMessage({ role, content, timestamp, isStreaming, agentType, 
 
       {/* Actions */}
       {!isUser && !isStreaming && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1 items-end">
+          <div className="flex items-center gap-1 rounded-md bg-secondary/40 p-0.5">
+            {(['en', 'hi', 'kn'] as SpeechLang[]).map((lang) => (
+              <button
+                key={lang}
+                type="button"
+                onClick={() => handleLanguageChange(lang)}
+                className={cn(
+                  'px-1.5 py-0.5 text-[10px] font-semibold rounded transition-colors',
+                  language === lang
+                    ? 'bg-primary/20 text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                title={
+                  lang === 'en' ? 'English' : lang === 'hi' ? 'हिंदी (Hindi)' : 'ಕನ್ನಡ (Kannada)'
+                }
+              >
+                {LANG_LABEL[lang]}
+              </button>
+            ))}
+          </div>
+
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={handleTextToSpeech}
-            disabled={isPlayingAudio}
-            className="text-muted-foreground hover:text-foreground"
-            title="Read message aloud"
+            onClick={handlePlayPause}
+            disabled={audioState === 'fetching'}
+            className={cn(
+              'text-muted-foreground hover:text-foreground',
+              audioState === 'playing' && 'text-primary'
+            )}
+            title={
+              audioState === 'playing'
+                ? 'Pause'
+                : audioState === 'paused'
+                  ? 'Resume'
+                  : audioState === 'fetching'
+                    ? 'Generating audio...'
+                    : 'Read aloud'
+            }
           >
-            {isPlayingAudio ? (
+            {audioState === 'fetching' ? (
               <RotateCw className="w-4 h-4 animate-spin" />
+            ) : audioState === 'playing' ? (
+              <Pause className="w-4 h-4" />
+            ) : audioState === 'paused' ? (
+              <Play className="w-4 h-4" />
             ) : (
               <Volume2 className="w-4 h-4" />
             )}
           </Button>
+
           <Button
             variant="ghost"
             size="icon-sm"
