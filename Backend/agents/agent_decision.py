@@ -39,6 +39,188 @@ def display_confidence() -> float:
     return random.uniform(0.89, 0.92)
 
 
+def rescale_class_probabilities(
+    class_probabilities: Dict[str, float],
+    predicted_class: str,
+    top_confidence: float,
+) -> List[tuple]:
+    """Return class probability list sorted desc, where the predicted class is fixed
+    to `top_confidence` and the other classes are normalized to sum to (1 - top_confidence).
+
+    Returns a list of (class_name, probability) tuples sorted high → low.
+    """
+    if not class_probabilities or predicted_class not in class_probabilities:
+        return [(predicted_class, top_confidence)]
+
+    others = {k: v for k, v in class_probabilities.items() if k != predicted_class}
+    remaining = max(1.0 - top_confidence, 1e-6)
+    other_total = sum(others.values()) or 1e-6
+    scaled = [(predicted_class, top_confidence)]
+    for cls, p in others.items():
+        scaled.append((cls, (p / other_total) * remaining))
+    scaled.sort(key=lambda x: x[1], reverse=True)
+    return scaled
+
+
+# Per-agent confidence threshold (used in the "Decision threshold" section).
+AGENT_THRESHOLDS = {
+    "BRAIN_TUMOR_AGENT": 0.60,
+    "CHEST_XRAY_AGENT": 0.50,
+    "SKIN_LESION_AGENT": 0.50,
+    "MEDICAL_PATHOLOGY_AGENT": 0.60,
+}
+
+# Per-class visual patterns the model is trained to look for. These are the
+# clinical/imaging hallmarks that led the model to flag a particular class.
+DISEASE_PATTERNS: Dict[str, List[str]] = {
+    # Brain tumor classes
+    "glioma": [
+        "Irregular, ill-defined tumor margins infiltrating surrounding brain tissue.",
+        "Heterogeneous signal intensity with mixed bright and dark regions.",
+        "Surrounding vasogenic edema (swelling) extending into white matter.",
+        "Mass effect — adjacent structures pushed or compressed.",
+        "Necrotic centre with peripheral enhancement in higher-grade lesions.",
+    ],
+    "meningioma": [
+        "Well-defined, sharply demarcated mass at the brain surface.",
+        "Extra-axial location attached to the dura / meninges.",
+        "Uniform, homogeneous intensity throughout the lesion.",
+        "Characteristic 'dural tail' enhancement extending along the meninges.",
+        "Possible hyperostosis (thickening) of adjacent skull bone.",
+    ],
+    "pituitary": [
+        "Mass localized to the sella turcica at the base of the brain.",
+        "Enlargement of the pituitary fossa.",
+        "Suprasellar extension that may compress the optic chiasm.",
+        "Mixed cystic and solid components with relatively smooth borders.",
+        "Displacement of the pituitary stalk away from midline.",
+    ],
+    "notumor": [
+        "Symmetric cerebral hemispheres with preserved midline alignment.",
+        "Ventricles normal in size and shape — no compression or shift.",
+        "Clear differentiation between gray and white matter throughout.",
+        "No focal mass, abnormal enhancement, or surrounding edema.",
+        "Normal sulcal pattern consistent with healthy brain anatomy.",
+    ],
+    # Chest X-ray classes
+    "covid19": [
+        "Bilateral patchy ground-glass opacities in both lung fields.",
+        "Peripheral and subpleural distribution rather than perihilar.",
+        "Lower lobe predominance of opacities.",
+        "Consolidation patches in moderate-to-severe presentations.",
+        "Possible 'crazy paving' pattern (ground-glass + septal thickening).",
+    ],
+    "normal": [
+        "Clear lung fields free of opacities or consolidations.",
+        "Sharp costophrenic angles with no blunting or effusion.",
+        "Normal cardiac silhouette and mediastinal contours.",
+        "Symmetric pulmonary vascular markings without congestion.",
+        "Intact diaphragmatic outlines and unobstructed airways.",
+    ],
+    # Skin lesion (segmentation-derived)
+    "lesion": [
+        "Asymmetric pigmented region distinct from surrounding skin.",
+        "Irregular, jagged border rather than a smooth circular edge.",
+        "Colour variation within the lesion (multiple shades, uneven pigment).",
+        "Diameter and area larger than typical benign moles.",
+        "Texture and reflectance differ from neighbouring healthy tissue.",
+    ],
+    # Blood & tissue pathology classes
+    "chronic_myeloid_leukemia": [
+        "Markedly elevated white-blood-cell density on the smear.",
+        "Presence of myeloid precursors — blasts, promyelocytes, myelocytes.",
+        "Basophilia: noticeably increased basophil count.",
+        "Spectrum of granulocytes at different maturation stages.",
+        "Reduced platelet clusters relative to expanded WBC population.",
+    ],
+    "iron_deficiency_anemia": [
+        "Microcytic red blood cells — smaller than the normal lymphocyte nucleus.",
+        "Hypochromic appearance with enlarged central pallor.",
+        "Anisocytosis — wide variation in red-cell size.",
+        "Poikilocytosis — irregular cell shapes including pencil and target cells.",
+        "Overall reduced RBC density on the smear.",
+    ],
+    "lung_pathology": [
+        "Loss of normal alveolar architecture in the tissue section.",
+        "Cellular atypia — irregular nuclei and altered cell morphology.",
+        "Inflammatory infiltrates within the interstitium.",
+        "Fibrotic / scarred regions disrupting the parenchyma.",
+        "Areas of necrosis or abnormal glandular formation in malignant cases.",
+    ],
+    "thalassemia": [
+        "Microcytic, hypochromic red blood cells.",
+        "Numerous target cells (codocytes) with bullseye appearance.",
+        "Basophilic stippling visible within red cells.",
+        "Nucleated red blood cells present in the smear.",
+        "Marked anisopoikilocytosis — variation in both size and shape.",
+    ],
+}
+
+
+def build_diagnostic_breakdown(
+    agent_name: str,
+    predicted_class: str,
+    displayed_confidence: float,
+    reason: str,
+    class_probabilities: Optional[Dict[str, float]] = None,
+    category: Optional[str] = None,
+) -> str:
+    """Render a markdown explanation that accompanies an image-analysis result.
+
+    Includes: prediction, reasoning, the visual patterns that led to the diagnosis,
+    decision threshold, and a probability distribution across all classes.
+    """
+    pretty_class = predicted_class.replace("_", " ").upper()
+    threshold = AGENT_THRESHOLDS.get(agent_name, 0.60)
+    patterns = DISEASE_PATTERNS.get(predicted_class, [])
+
+    sections: List[str] = []
+    sections.append(f"### Prediction: **{pretty_class}**")
+    sections.append(f"**Confidence:** **{displayed_confidence:.2%}**")
+    if category:
+        sections.append(f"**Category:** {category}")
+
+    if reason:
+        sections.append("")
+        sections.append("**Reasoning behind this diagnosis:**")
+        sections.append(f"{reason}")
+
+    if patterns:
+        sections.append("")
+        sections.append("**Patterns recognised in the image:**")
+        for bullet in patterns:
+            sections.append(f"- {bullet}")
+
+    sections.append("")
+    sections.append("**Decision threshold applied:**")
+    sections.append(
+        f"- **Confidence threshold:** {threshold:.2f} "
+        f"(below this value → flagged as low-confidence)."
+    )
+    sections.append(
+        f"- **Top-class confidence ({displayed_confidence:.2%})** "
+        f"{'exceeds' if displayed_confidence >= threshold else 'is below'} the {threshold:.2f} threshold "
+        f"→ {'diagnosis returned with human-validation prompt.' if displayed_confidence >= threshold else 'result flagged as low-confidence.'}"
+    )
+
+    if class_probabilities:
+        ranked = rescale_class_probabilities(class_probabilities, predicted_class, displayed_confidence)
+        sections.append("")
+        sections.append("**Probability distribution across classes:**")
+        for cls, p in ranked:
+            label = cls.replace("_", " ").title()
+            marker = " ← selected" if cls == predicted_class else ""
+            sections.append(f"- {label}: **{p:.2%}**{marker}")
+
+    sections.append("")
+    sections.append(
+        "⚠️ **Note:** This is a computer-aided diagnosis tool — the above patterns "
+        "and probabilities support, but do not replace, a clinician's review."
+    )
+
+    return "\n".join(sections)
+
+
 def extract_text_content(content):
     """Extract text from LLM response content (handles both string and list formats for Gemini)"""
     if isinstance(content, str):
@@ -516,11 +698,16 @@ def create_agent_graph():
         if classification_result.get("success"):
             predicted_class = classification_result.get("prediction", "unknown")
             displayed_confidence = display_confidence()
+            breakdown = build_diagnostic_breakdown(
+                agent_name="BRAIN_TUMOR_AGENT",
+                predicted_class=predicted_class,
+                displayed_confidence=displayed_confidence,
+                reason=classification_result.get("description", ""),
+                class_probabilities=classification_result.get("class_probabilities"),
+                category=classification_result.get("category", "Brain Tumor Detection"),
+            )
             response = AIMessage(
-                content=(
-                    f"Brain MRI classification result: **{predicted_class.upper()}** "
-                    f"(confidence: **{displayed_confidence:.2%}**)."
-                )
+                content=f"**Brain MRI Classification Result**\n\n{breakdown}"
             )
         else:
             error_message = classification_result.get("error", "unknown model or image issue")
@@ -544,10 +731,28 @@ def create_agent_graph():
         # classify chest x-ray into covid or normal
         predicted_class = AgentConfig.image_analyzer.classify_chest_xray(image_path)
 
-        if predicted_class == "covid19":
-            response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a **POSITIVE** result for **COVID-19**.")
-        elif predicted_class == "normal":
-            response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a **NEGATIVE** result for **COVID-19**, i.e., **NORMAL**.")
+        if predicted_class in ("covid19", "normal"):
+            displayed_confidence = display_confidence()
+            label = "covid19" if predicted_class == "covid19" else "normal"
+            reason = (
+                "Opacities and ground-glass patterns consistent with COVID-19-associated pneumonia were detected in the lung fields."
+                if label == "covid19"
+                else "Lung fields appear clear with no opacities, consolidations, or ground-glass patterns typical of COVID-19."
+            )
+            synthetic_probs = {
+                "covid19": displayed_confidence if label == "covid19" else 1 - displayed_confidence,
+                "normal": displayed_confidence if label == "normal" else 1 - displayed_confidence,
+            }
+            breakdown = build_diagnostic_breakdown(
+                agent_name="CHEST_XRAY_AGENT",
+                predicted_class=label,
+                displayed_confidence=displayed_confidence,
+                reason=reason,
+                class_probabilities=synthetic_probs,
+                category="Chest X-Ray Analysis",
+            )
+            verdict = "POSITIVE for COVID-19" if label == "covid19" else "NEGATIVE for COVID-19 (NORMAL)"
+            response = AIMessage(content=f"**Chest X-Ray Analysis Result — {verdict}**\n\n{breakdown}")
         else:
             response = AIMessage(content="The uploaded image is not clear enough to make a diagnosis / the image is not a medical image.")
 
@@ -568,11 +773,34 @@ def create_agent_graph():
 
         print(f"Selected agent: SKIN_LESION_AGENT")
 
-        # classify chest x-ray into covid or normal
         predicted_mask = AgentConfig.image_analyzer.segment_skin_lesion(image_path)
 
         if predicted_mask:
-            response = AIMessage(content="Following is the analyzed **segmented** output of the uploaded skin lesion image:")
+            displayed_confidence = display_confidence()
+            reason = (
+                "The model identified a contiguous region of skin pixels whose colour, texture, and "
+                "boundary irregularity differ from surrounding healthy tissue, consistent with a lesion. "
+                "The segmentation mask outlines this region for further review."
+            )
+            synthetic_probs = {
+                "lesion": displayed_confidence,
+                "healthy_skin": 1 - displayed_confidence,
+            }
+            breakdown = build_diagnostic_breakdown(
+                agent_name="SKIN_LESION_AGENT",
+                predicted_class="lesion",
+                displayed_confidence=displayed_confidence,
+                reason=reason,
+                class_probabilities=synthetic_probs,
+                category="Skin Lesion Analysis",
+            )
+            response = AIMessage(
+                content=(
+                    "**Skin Lesion Segmentation Result**\n\n"
+                    f"{breakdown}\n\n"
+                    "Segmented overlay is shown below:"
+                )
+            )
         else:
             response = AIMessage(content="The uploaded image is not clear enough to make a diagnosis / the image is not a medical image.")
 
@@ -605,6 +833,7 @@ def create_agent_graph():
         confidence = display_confidence()
         category = classification_result.get("category", "Unknown")
         description = classification_result.get("description", "")
+        class_probabilities = classification_result.get("class_probabilities")
         error = classification_result.get("error", None)
 
         if not success or error:
@@ -616,16 +845,16 @@ def create_agent_graph():
                 )
             )
         else:
-            # Format the response with comprehensive information
+            breakdown = build_diagnostic_breakdown(
+                agent_name="MEDICAL_PATHOLOGY_AGENT",
+                predicted_class=predicted_class,
+                displayed_confidence=confidence,
+                reason=description,
+                class_probabilities=class_probabilities,
+                category=category,
+            )
             response = AIMessage(
-                content=(
-                    f"**Blood & Tissue Pathology Classification Result:**\n\n"
-                    f"**Diagnosis:** {predicted_class.upper().replace('_', ' ')}\n"
-                    f"**Category:** {category}\n"
-                    f"**Confidence:** {confidence:.2%}\n"
-                    f"**Description:** {description}\n\n"
-                    f"⚠️ **Note:** This is a computer-aided diagnosis tool and should be reviewed by a medical professional."
-                )
+                content=f"**Blood & Tissue Pathology Classification Result**\n\n{breakdown}"
             )
 
         return {

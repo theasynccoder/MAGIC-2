@@ -88,6 +88,11 @@ class BrainTumorClassifier:
             predicted_confidence = float(confidence.item())
             reason = self.REASONS.get(predicted_label, "")
 
+            probs_vec = probs.squeeze(0).cpu().tolist()
+            class_probabilities = {
+                self.CLASS_NAMES[i]: float(probs_vec[i]) for i in range(len(self.CLASS_NAMES))
+            }
+
             logger.info(f"Prediction: {predicted_label} | Confidence: {predicted_confidence:.2%}")
 
             return {
@@ -98,6 +103,7 @@ class BrainTumorClassifier:
                 "category": "Brain Tumor Detection",
                 "description": reason,
                 "confidence_text": f"{predicted_confidence * 100:.2f}%",
+                "class_probabilities": class_probabilities,
                 "error": None,
             }
         except Exception as exc:
