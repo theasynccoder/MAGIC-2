@@ -217,6 +217,11 @@ class BloodTissuePathologyClassifier:
 
             description = self.CLASS_DESCRIPTIONS[predicted_label]
 
+            probs_vec = probabilities.squeeze(0).cpu().tolist()
+            class_probabilities = {
+                self.CLASS_NAMES[i]: float(probs_vec[i]) for i in range(len(self.CLASS_NAMES))
+            }
+
             logger.info(
                 f"Prediction: {predicted_label} | "
                 f"Confidence: {confidence_score:.4f}"
@@ -228,6 +233,7 @@ class BloodTissuePathologyClassifier:
                 "confidence": round(confidence_score, 4),
                 "category": category,
                 "description": description,
+                "class_probabilities": class_probabilities,
                 "error": None
             }
 
