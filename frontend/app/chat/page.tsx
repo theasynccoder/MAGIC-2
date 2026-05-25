@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Send,
@@ -59,7 +59,7 @@ const suggestedPrompts = [
   'Explain the cardiovascular system',
 ]
 
-export default function ChatPage() {
+function ChatContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialAgent = searchParams.get('agent') || 'medical-chat'
@@ -588,5 +588,13 @@ export default function ChatPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="w-full h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin" /></div>}>
+      <ChatContent />
+    </Suspense>
   )
 }
