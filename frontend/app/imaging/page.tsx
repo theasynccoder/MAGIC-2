@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, Suspense } from 'react'
+import { useState, Suspense, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, Scan, Microscope, ArrowLeft, Info, AlertCircle } from 'lucide-react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -12,6 +12,7 @@ import { ImageUpload } from '@/components/image-upload'
 import { PredictionResult } from '@/components/prediction-result'
 import { cn } from '@/lib/utils'
 import { predictionApi, type PredictionResult as PredictionResultType } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
 
 const analysisTypes = [
   {
@@ -62,7 +63,9 @@ const analysisTypes = [
 ]
 
 function ImagingContent() {
+  const router = useRouter()
   const searchParams = useSearchParams()
+  const { user, loading: authLoading } = useAuth()
   const initialType = searchParams.get('type') || 'brain'
   
   const [selectedType, setSelectedType] = useState(initialType)
@@ -71,7 +74,21 @@ function ImagingContent() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.replace('/login?redirect=/imaging')
+    }
+  }, [authLoading, user, router])
+
   const currentType = analysisTypes.find((t) => t.id === selectedType)!
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
+      </div>
+    )
+  }
 
   const handleUpload = async (file: File) => {
     setIsAnalyzing(true)
